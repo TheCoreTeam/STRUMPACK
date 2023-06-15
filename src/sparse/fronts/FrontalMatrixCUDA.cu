@@ -110,9 +110,9 @@ namespace strumpack {
      * Single extend-add operation from one contribution block into
      * the parent front. d1 is the size of F11, d2 is the size of F22.
      */
-    template<typename T, unsigned int unroll>
+    template<typename T, unsigned int unroll, bool left>
     __global__ void extend_add_kernel
-    (unsigned int by0, unsigned int nf, AssembleData<T>* dat, bool left) {
+    (unsigned int by0, unsigned int nf, AssembleData<T>* dat) {
       int y = blockIdx.x * blockDim.x + threadIdx.x,
         x0 = (blockIdx.y + by0) * unroll,
         z = blockIdx.z * blockDim.z + threadIdx.z;
@@ -194,10 +194,10 @@ namespace strumpack {
             unsigned int ny = std::min(nby-y, MAX_BLOCKS_Y);
             for (unsigned int f=0; f<nbf; f+=MAX_BLOCKS_Z) {
               dim3 grid(nbx, ny, std::min(nbf-f, MAX_BLOCKS_Z));
-              extend_add_kernel<T_,unroll><<<grid, block>>>
-                (y, nf-f*ops, dat_+f*ops, true);
-              extend_add_kernel<T_,unroll><<<grid, block>>>
-                (y, nf-f*ops, dat_+f*ops, false);
+              extend_add_kernel<T_,unroll, true><<<grid, block>>>
+                (y, nf-f*ops, dat_+f*ops);
+              extend_add_kernel<T_,unroll, false><<<grid, block>>>
+                (y, nf-f*ops, dat_+f*ops);
             }
           }
         }
