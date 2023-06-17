@@ -64,6 +64,8 @@ namespace strumpack {
   SparseSolverMixedPrecision<factor_t,refine_t,integer_t>::
   solve(const DenseMatrix<refine_t>& b, DenseMatrix<refine_t>& x,
         bool use_initial_guess) {
+    TaskTimer t("solve");
+    t.start();
     auto solve_func =
       [&](DenseMatrix<refine_t>& w) {
         DenseMatrix<factor_t> new_x(w.rows(), w.cols()),
@@ -126,6 +128,8 @@ namespace strumpack {
     }
     // TODO check convergence, return whether or not this converged
     solver_.options().set_verbose(old_verbose);
+    t.stop();
+    std::cout << "#   - solve time = " << t.elapsed() << std::endl;
     return ReturnCode::SUCCESS;
   }
 
