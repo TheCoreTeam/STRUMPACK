@@ -482,9 +482,19 @@ namespace strumpack {
       L = LInfo_t(fp, solver_handles[0], max_streams, &A);
     }
     auto peak_dmem = peak_device_memory(ldata);
-    if (peak_dmem >= 0.9 * gpu::available_memory())
-      return split_smaller(A, opts, etree_level, task_depth);
-
+    if (peak_dmem >= 0.9 * gpu::available_memory()) {
+        return split_smaller(A, opts, etree_level, task_depth);
+    } else {
+        if (opts.verbose()) {
+            if (etree_level == 0) {
+                std::cout << "#   - GPU memory: "
+                << (double)peak_dmem * sizeof(char) / 1024 / 1024 << "MB" << std::endl;
+            } else {
+                std::cout << "#   - GPU memory for subtree: "
+                << (double)peak_dmem * sizeof(char) / 1024 / 1024 << "MB" << std::endl;
+            }
+        }
+    }
     std::vector<gpu::Stream> streams(max_streams);
     gpu::Stream copy_stream;
     std::vector<gpu::BLASHandle> blas_handles(max_streams);
