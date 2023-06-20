@@ -19,7 +19,7 @@
 
 namespace strumpack {
 
-    template<typename scalar_t, typename integer_t> class LevelInfo;
+    template<typename scalar_t, typename integer_t> class LevelInfoUnified;
 
     namespace gpu {
         template<typename scalar_t> struct FrontData;
@@ -34,7 +34,7 @@ namespace strumpack {
         using DenseM_t = DenseMatrix<scalar_t>;
         using DenseMW_t = DenseMatrixWrapper<scalar_t>;
         using SpMat_t = CompressedSparseMatrix<scalar_t,integer_t>;
-        using LInfo_t = LevelInfo<scalar_t,integer_t>;
+        using LInfo_t = LevelInfoUnified<scalar_t,integer_t>;
 
     public:
         FrontalMatrixUnified(integer_t sep, integer_t sep_begin, integer_t sep_end,
@@ -98,7 +98,7 @@ namespace strumpack {
         using F_t::dim_sep;
         using F_t::dim_upd;
 
-        template<typename T,typename I> friend class LevelInfo;
+        template<typename T,typename I> friend class LevelInfoUnified;
     };
 
 } // end namespace strumpack

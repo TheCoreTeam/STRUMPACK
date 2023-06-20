@@ -41,16 +41,16 @@
 
 namespace strumpack {
 
-    template<typename scalar_t, typename integer_t> class LevelInfo {
+    template<typename scalar_t, typename integer_t> class LevelInfoUnified {
         using F_t = FrontalMatrix<scalar_t,integer_t>;
         using FG_t = FrontalMatrixUnified<scalar_t,integer_t>;
         using DenseMW_t = DenseMatrixWrapper<scalar_t>;
         using SpMat_t = CompressedSparseMatrix<scalar_t,integer_t>;
 
     public:
-        LevelInfo() {}
+        LevelInfoUnified() {}
 
-        LevelInfo(const std::vector<F_t*>& fronts, gpu::SOLVERHandle& handle,
+        LevelInfoUnified(const std::vector<F_t*>& fronts, gpu::SOLVERHandle& handle,
                   int max_streams, const SpMat_t* A=nullptr) {
             f.reserve(fronts.size());
             for (auto& F : fronts)
@@ -279,7 +279,7 @@ namespace strumpack {
 
     template<typename scalar_t,typename integer_t>
     std::size_t peak_device_memory
-            (const std::vector<LevelInfo<scalar_t,integer_t>>& ldata) {
+            (const std::vector<LevelInfoUnified<scalar_t,integer_t>>& ldata) {
         std::size_t peak_dmem = 0;
         for (std::size_t l=0; l<ldata.size(); l++) {
             auto& L = ldata[l];
@@ -638,7 +638,6 @@ namespace strumpack {
                                 gpu_check(gpu::copy_device_to_host_async<scalar_t>
                                                   (pin[c % 2], f.F11_.data(),
                                                    factors_chunk[c], copy_stream));
-//                                for(integer_t )
                             }
                         }
                     }
