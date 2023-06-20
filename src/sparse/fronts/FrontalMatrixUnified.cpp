@@ -64,12 +64,16 @@ namespace strumpack {
                 auto F = f[i];
                 const std::size_t dsep = F->dim_sep();
                 const std::size_t dupd = F->dim_upd();
+                diagonal_size += dsep * dsep;
+                off_diagonal_size += 2 * dsep * dupd;
                 L_size += dsep*(dsep + dupd);
                 U_size += dsep*dupd;
                 Schur_size += dupd*dupd;
                 piv_size += dsep;
                 total_upd_size += dupd;
                 if (dsep <= 32) {
+                    factors_diagonal_small += dsep * dsep;
+                    factors_off_diagonal_small += 2 * dsep * dupd;
                     factors_small += dsep*(dsep + 2*dupd);
                     if (dsep <= 8)       N8++;
                     else if (dsep <= 16) N16++;
@@ -168,6 +172,16 @@ namespace strumpack {
             }
         }
 
+        void set_factor_pointers(scalar_t* factors_diagonal, scalar_t* factors_off_diagonal) {
+            for (auto F : f) {
+                const std::size_t dsep = F->dim_sep();
+                const std::size_t dupd = F->dim_upd();
+                F->F11_ = DenseMW_t(dsep, dsep, factors_diagonal, dsep); factors_diagonal += dsep*dsep;
+                F->F12_ = DenseMW_t(dsep, dupd, factors_off_diagonal, dsep); factors_off_diagonal += dsep*dupd;
+                F->F21_ = DenseMW_t(dupd, dsep, factors_off_diagonal, dupd); factors_off_diagonal += dupd*dsep;
+            }
+        }
+
         void set_pivot_pointers(int* pmem) {
             for (auto F : f) {
                 F->piv_ = pmem;
@@ -201,8 +215,9 @@ namespace strumpack {
 
         int align = 0;
         std::vector<FG_t*> f;
-        std::size_t L_size = 0, U_size = 0, factor_size = 0,
-                factors_small = 0, Schur_size = 0, piv_size = 0,
+        std::size_t diagonal_size = 0, off_diagonal_size = 0, L_size = 0, U_size = 0,
+                factors_diagonal_small = 0, factors_off_diagonal_small = 0,
+                factor_size = 0, factors_small = 0, Schur_size = 0, piv_size = 0,
                 total_upd_size = 0;
         std::size_t N8 = 0, N16 = 0, N24 = 0, N32 = 0, small_fronts = 0;
         std::size_t work_bytes = 0, ea_bytes = 0, factor_bytes = 0;
@@ -518,7 +533,7 @@ namespace strumpack {
         for (int l=lvls-1; l>=0; l--) {
             // TaskTimer tl("");
             // tl.start();
-            auto& L = ldata[l];
+            LInfo_t& L = ldata[l];
             // if (opts.verbose()) L.print_info(l, lvls);
             try {
                 char *work_mem = nullptr, *dea_mem = nullptr;
@@ -534,7 +549,8 @@ namespace strumpack {
                 }
                 gpu_check(gpu::memset<scalar_t>(work_mem, 0, L.Schur_size));
                 gpu_check(gpu::memset<scalar_t>(dev_factors, 0, L.factor_size));
-                L.set_factor_pointers(dev_factors);
+//                L.set_factor_pointers(dev_factors);
+                L.set_factor_pointers(dev_factors, dev_factors + L.diagonal_size);
                 L.set_work_pointers(work_mem, max_streams);
                 old_work = work_mem;
 
@@ -556,37 +572,62 @@ namespace strumpack {
                 // buffer
                 const int nchunks = 16;
                 std::size_t Bf = (L.f.size()-L.small_fronts + nchunks - 1) / nchunks;
-                std::vector<std::size_t> chunks, factors_chunk;
-                for (std::size_t n=L.small_fronts, fc=0, c=0; n<L.f.size(); n++) {
+                std::vector<std::size_t> chunks;
+//                std::vector<std::size_t> factors_chunk;
+                std::vector<std::size_t> factors_diagonal_chunk, factors_off_diagonal_chunk;
+                for (std::size_t n=L.small_fronts, fc=0, c=0, fdc = 0, fodc = 0; n<L.f.size(); n++) {
                     auto& f = *(L.f[n]);
                     const std::size_t dsep = f.dim_sep();
                     const std::size_t dupd = f.dim_upd();
                     std::size_t size_front = dsep * (dsep + 2*dupd);
+                    std::size_t size_factors_diagonal = dsep * dsep;
+                    std::size_t size_factors_off_diagonal = 2 * dsep * dupd;
                     if (c == Bf || fc + size_front > max_pinned) {
                         chunks.push_back(c);
-                        factors_chunk.push_back(fc);
+//                        factors_chunk.push_back(fc);
+                        factors_diagonal_chunk.push_back(fdc);
+                        factors_off_diagonal_chunk.push_back(fodc);
                         c = fc = 0;
+                        fdc = fodc = 0;
                     }
                     c++;
                     fc += size_front;
+                    fdc += size_factors_diagonal;
+                    fodc += size_factors_off_diagonal;
                     if (n == L.f.size()-1) { // final chunk
                         chunks.push_back(c);
-                        factors_chunk.push_back(fc);
+//                        factors_chunk.push_back(fc);
+                        factors_diagonal_chunk.push_back(fdc);
+                        factors_off_diagonal_chunk.push_back(fodc);
                     }
                 }
 
                 e_small.wait(copy_stream);
+//                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+//                                  (pinned, dev_factors, L.factors_small, copy_stream));
                 gpu_check(gpu::copy_device_to_host_async<scalar_t>
-                                  (pinned, dev_factors, L.factors_small, copy_stream));
+                                  (pinned, dev_factors, L.factors_diagonal_small, copy_stream));
+                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+                                  (pinned + L.factors_diagonal_small,
+                                   dev_factors + L.diagonal_size,
+                                   L.factors_off_diagonal_small, copy_stream));
 
                 STRUMPACK_ADD_MEMORY(L.factor_bytes);
-                L.f[0]->host_factors_.reset(new scalar_t[L.factor_size]);
-                scalar_t* host_factors = L.f[0]->host_factors_.get();
+//                L.f[0]->host_factors_.reset(new scalar_t[L.factor_size]);
+//                scalar_t* host_factors = L.f[0]->host_factors_.get();
+                L.f[0]->host_factors_diagonal_.reset(new scalar_t[L.diagonal_size]);
+                L.f[0]->host_factors_off_diagonal_.reset(new scalar_t[L.off_diagonal_size]);
+                scalar_t* host_factors_diagonal = L.f[0]->host_factors_diagonal_.get();
+                scalar_t* host_factors_off_diagonal = L.f[0]->host_factors_off_diagonal_.get();
                 copy_stream.synchronize();
-#pragma omp parallel for
-                for (std::size_t i=0; i<L.factors_small; i++)
-                    host_factors[i] = pinned[i];
-                host_factors += L.factors_small;
+//#pragma omp parallel for
+//                for (std::size_t i=0; i<L.factors_small; i++)
+//                    host_factors[i] = pinned[i];
+//                host_factors += L.factors_small;
+                memcpy(host_factors_diagonal, pinned, L.factors_diagonal_small * sizeof(scalar_t));
+                memcpy(host_factors_off_diagonal, pinned + L.factors_diagonal_small, L.factors_off_diagonal_small * sizeof(scalar_t));
+                host_factors_diagonal += L.factors_diagonal_small;
+                host_factors_off_diagonal += L.factors_off_diagonal_small;
 
                 if (!chunks.empty()) {
                     scalar_t* pin[2] = {pinned.template as<scalar_t>(),
@@ -602,13 +643,21 @@ namespace strumpack {
 #pragma omp task
                                 {
                                     copy_stream.synchronize();
-                                    auto fc = factors_chunk[c-1];
-#if defined(STRUMPACK_USE_OPENMP_TASKLOOP)
-#pragma omp taskloop //num_tasks(omp_get_num_threads()-1)
-#endif
-                                    for (std::size_t i=0; i<fc; i++)
-                                        host_factors[i] = pin[(c-1) % 2][i];
-                                    host_factors += fc;
+//                                    auto fc = factors_chunk[c-1];
+//#if defined(STRUMPACK_USE_OPENMP_TASKLOOP)
+//#pragma omp taskloop //num_tasks(omp_get_num_threads()-1)
+//#endif
+//                                    for (std::size_t i=0; i<fc; i++)
+//                                        host_factors[i] = pin[(c-1) % 2][i];
+//                                    host_factors += fc;
+                                    auto fdc = factors_diagonal_chunk[c-1];
+                                    auto fodc = factors_off_diagonal_chunk[c-1];
+                                    memcpy(host_factors_diagonal,
+                                           pin[(c-1) % 2], fdc * sizeof(scalar_t));
+                                    memcpy(host_factors_off_diagonal,
+                                           pin[(c-1) % 2] + fdc, fodc * sizeof(scalar_t));
+                                    host_factors_diagonal += fdc;
+                                    host_factors_off_diagonal += fodc;
                                 }
                             }
 #pragma omp task
@@ -635,24 +684,37 @@ namespace strumpack {
                                 events[c].record(streams[s]);
                                 events[c].wait(copy_stream);
                                 auto& f = *(L.f[n0]);
+//                                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+//                                                  (pin[c % 2], f.F11_.data(),
+//                                                   factors_chunk[c], copy_stream));
+                                auto fdc = factors_diagonal_chunk[c];
+                                auto fodc = factors_off_diagonal_chunk[c];
                                 gpu_check(gpu::copy_device_to_host_async<scalar_t>
                                                   (pin[c % 2], f.F11_.data(),
-                                                   factors_chunk[c], copy_stream));
+                                                   fdc, copy_stream));
+                                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+                                                  (pin[c % 2] + fdc, f.F12_.data(),
+                                                   fodc, copy_stream));
                             }
                         }
                     }
                     copy_stream.synchronize();
-                    auto fc = factors_chunk.back();
-#pragma omp parallel for
-                    for (std::size_t i=0; i<fc; i++)
-                        host_factors[i] = pin[(chunks.size()-1) % 2][i];
+//                    auto fc = factors_chunk.back();
+//#pragma omp parallel for
+//                    for (std::size_t i=0; i<fc; i++)
+//                        host_factors[i] = pin[(chunks.size()-1) % 2][i];
+                    auto fdc = factors_diagonal_chunk.back();
+                    auto fodc = factors_off_diagonal_chunk.back();
+                    memcpy(host_factors_diagonal, pin[(chunks.size()-1) % 2], fdc * sizeof(scalar_t));
+                    memcpy(host_factors_off_diagonal, pin[(chunks.size()-1) % 2] + fdc, fodc * sizeof(scalar_t));
                 }
 
                 L.f[0]->pivot_mem_.resize(L.piv_size);
                 copy_stream.synchronize();
                 gpu_check(gpu::copy_device_to_host
                                   (L.f[0]->pivot_mem_.data(), L.f[0]->piv_, L.piv_size));
-                L.set_factor_pointers(L.f[0]->host_factors_.get());
+//                L.set_factor_pointers(L.f[0]->host_factors_.get());
+                L.set_factor_pointers(L.f[0]->host_factors_diagonal_.get(), L.f[0]->host_factors_off_diagonal_.get());
                 L.set_pivot_pointers(L.f[0]->pivot_mem_.data());
 
                 std::vector<int> getrf_infos(L.f.size());

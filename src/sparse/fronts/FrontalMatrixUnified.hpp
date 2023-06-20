@@ -67,6 +67,7 @@ namespace strumpack {
 
     private:
         std::unique_ptr<scalar_t[]> host_factors_, host_Schur_;
+        std::unique_ptr<scalar_t[]> host_factors_diagonal_, host_factors_off_diagonal_;
         DenseMW_t F11_, F12_, F21_, F22_;
         Eigen::SparseMatrix<scalar_t,Eigen::ColMajor,integer_t> F11L_sparse_{};
         Eigen::SparseMatrix<scalar_t,Eigen::ColMajor,integer_t> F11U_sparse_{};
