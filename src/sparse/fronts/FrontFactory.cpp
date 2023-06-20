@@ -51,6 +51,8 @@
 #endif
 #if defined(STRUMPACK_USE_CUDA) || defined(STRUMPACK_USE_HIP)
 #include "FrontalMatrixGPU.hpp"
+#include "FrontalMatrixUnified.hpp"
+
 #endif
 #if defined(STRUMPACK_USE_SYCL)
 #include "FrontSYCL.hpp"
@@ -77,8 +79,14 @@ namespace strumpack {
           (new FrontalMatrixMAGMA<scalar_t,integer_t>(s, sbegin, send, upd));
 #else
 #if defined(STRUMPACK_USE_CUDA) || defined(STRUMPACK_USE_HIP)
-        front.reset
-          (new FrontalMatrixGPU<scalar_t,integer_t>(s, sbegin, send, upd));
+          if (is_unified(opts)){
+              front.reset
+                      (new FrontalMatrixUnified<scalar_t,integer_t>(s, sbegin, send, upd));
+          } else {
+              front.reset
+                      (new FrontalMatrixGPU<scalar_t,integer_t>(s, sbegin, send, upd));
+          }
+
 #endif
 #endif
 #if defined(STRUMPACK_USE_SYCL)

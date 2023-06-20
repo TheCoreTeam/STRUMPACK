@@ -1126,6 +1126,11 @@ namespace strumpack {
     bool use_gpu() const { return use_gpu_; }
 
     /**
+     * Check wheter or not to use unified-memory off-loading.
+     */
+    bool use_unified() const { return use_unified_; }
+
+    /**
      * Check wheter or not to use OpenMP tree traversal is the sparse
      * solver.
      */
@@ -1263,8 +1268,10 @@ namespace strumpack {
     /** GPU options */
 #if defined(STRUMPACK_USE_CUDA) || defined(STRUMPACK_USE_HIP) || defined(STRUMPACK_USE_SYCL)
     bool use_gpu_ = true;
+    bool use_unified_ = true;
 #else
     bool use_gpu_ = false;
+    bool use_unified_ = false;
 #endif
     int gpu_streams_ = default_gpu_streams();
 
