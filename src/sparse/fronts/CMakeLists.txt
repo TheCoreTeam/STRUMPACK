@@ -52,7 +52,8 @@ endif()
 
 if(STRUMPACK_USE_CUDA)
   target_sources(strumpack PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/FrontalMatrixCUDA.cu)
+    ${CMAKE_CURRENT_LIST_DIR}/FrontalMatrixCUDA.cu
+    ${CMAKE_CURRENT_LIST_DIR}/FrontalMatrixUnified.cu)
 endif()
 
 if(STRUMPACK_USE_HIP)
