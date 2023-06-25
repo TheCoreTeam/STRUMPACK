@@ -739,6 +739,11 @@ namespace strumpack {
      */
     void disable_gpu() { use_gpu_ = false; }
 
+      /**
+   * Disable GPU off-loading.
+   */
+    void disable_unified() { use_unified_ = false; }
+
     /**
      * Set the number of (CUDA) streams to be used in the code.
      */
