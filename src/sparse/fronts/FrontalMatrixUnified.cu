@@ -64,15 +64,15 @@ namespace strumpack {
     template<class T> struct cuda_type { typedef T value_type; };
     template<class T> struct cuda_type<std::complex<T>> { typedef thrust::complex<T> value_type; };
 
-    __device__ float real_part(float& a) { return a; }
-    __device__ double real_part(double& a) { return a; }
-    __device__ float real_part(thrust::complex<float>& a) { return a.real(); }
-    __device__ double real_part(thrust::complex<double>& a) { return a.real(); }
+    __device__ float inline real_part(float& a) { return a; }
+    __device__ double inline real_part(double& a) { return a; }
+    __device__ float inline real_part(thrust::complex<float>& a) { return a.real(); }
+    __device__ double inline real_part(thrust::complex<double>& a) { return a.real(); }
 
-    __device__ float absolute_value(float& a) { return fabsf(a); }
-    __device__ double absolute_value(double& a) { return fabs(a); }
-    __device__ float absolute_value(thrust::complex<float>& a) { return thrust::abs(a); }
-    __device__ double absolute_value(thrust::complex<double>& a) { return thrust::abs(a); }
+    __device__ float inline absolute_value(float& a) { return fabsf(a); }
+    __device__ double inline absolute_value(double& a) { return fabs(a); }
+    __device__ float inline absolute_value(thrust::complex<float>& a) { return thrust::abs(a); }
+    __device__ double inline absolute_value(thrust::complex<double>& a) { return thrust::abs(a); }
 
 
     /**
@@ -231,16 +231,13 @@ namespace strumpack {
      * Use thrust::complex instead of std::complex.
      */
     template<typename T, int NT> __device__ void
-    LU_block_kernel(int n, T* F, int* piv, int* info) {
+    LLT_block_kernel(int n, T* F, int* info) {
       using cuda_primitive_t = typename primitive_type<T>::value_type;
       using real_t = typename real_type<T>::value_type;
-      __shared__ int p;
       __shared__ cuda_primitive_t M_[NT*NT];
       T* M = reinterpret_cast<T*>(M_);
-      __shared__ real_t Mmax, cabs[NT];
       int j = threadIdx.x, i = threadIdx.y;
-      if (i == 0 && j == 0)
-        *info = 0;
+      *info = 0;
 
       // copy F from global device storage into shared memory
       if (i < n && j < n)
@@ -248,44 +245,20 @@ namespace strumpack {
       __syncthreads();
 
       for (int k=0; k<n; k++) {
-        // only 1 thread looks for the pivot element
-        // this should be optimized?
-        if (j == k && i >= k)
-          cabs[i] = absolute_value(M[i+j*NT]);
-        __syncthreads();
-        if (j == k && i == k) {
-          p = k;
-          Mmax = cabs[k];
-          for (int l=k+1; l<n; l++) {
-            auto tmp = cabs[l];
-            if (tmp > Mmax) {
-              Mmax = tmp;
-              p = l;
-            }
+          auto diagonal = M[k + k * NT];
+          if (absolute_value(diagonal) <= 0) {
+              *info = k;
+              return;
           }
-          piv[k] = p + 1;
-        }
-        __syncthreads();
-        if (Mmax == T(0.)) {
-          if (j == k && i == k && *info == 0)
-            *info = k;
-        } else {
-          // swap row k with the pivot row
-          if (j < n && i == k && p != k) {
-            auto tmp = M[k+j*NT];
-            M[k+j*NT] = M[p+j*NT];
-            M[p+j*NT] = tmp;
-          }
-          __syncthreads();
+          diagonal = sqrt(diagonal);
           // divide by the pivot element
-          if (j == k && i > k && i < n)
-            M[i+k*NT] /= M[k+k*NT];
+          if (j == k && i >= k && i < n)
+            M[i+k*NT] /= diagonal;
           __syncthreads();
           // Schur update
           if (j > k && i > k && j < n && i < n)
-            M[i+j*NT] -= M[i+k*NT] * M[k+j*NT];
+            M[i+j*NT] -= M[i+k*NT] * M[j+k*NT];
           __syncthreads();
-        }
       }
       // write back from shared to global device memory
       if (i < n && j < n)
@@ -293,10 +266,10 @@ namespace strumpack {
     }
 
     template<typename T, int NT, typename real_t> __global__ void
-    LU_block_kernel_batched(FrontData<T>* dat, bool replace,
+    LLT_block_kernel_batched(FrontData<T>* dat, bool replace,
                             real_t thresh, int* dinfo) {
       FrontData<T>& A = dat[blockIdx.x];
-      LU_block_kernel<T,NT>(A.n1, A.F11, A.piv, &dinfo[blockIdx.x]);
+      LLT_block_kernel<T,NT>(A.n1, A.F11, &dinfo[blockIdx.x]);
       if (replace) {
         int i = threadIdx.x, j = threadIdx.y;
         if (i == j && i < A.n1) {
@@ -382,25 +355,14 @@ namespace strumpack {
      * T=thrust::complex<?> instead.
      */
     template<typename T, int NT> __device__ void
-    solve_block_kernel(int n, int m, T* F, T* X, int* piv) {
+    solve_symmetric_block_kernel(int n, int m, T* F, T* X) {
       using primitive_t = typename primitive_type<T>::value_type;
-      __shared__ int P[NT];
       __shared__ primitive_t A_[NT*NT], B_[NT*NT];
       T *B = reinterpret_cast<T*>(B_), *A = reinterpret_cast<T*>(A_);
-      int j = threadIdx.x, i = threadIdx.y;
-      if (j == 0)
-        P[i] = i;
-      __syncthreads();
-      if (i == 0 && j == 0)
-        for (int k=0; k<n; k++) {
-          auto p = piv[k]-1;
-          auto tmp = P[k];
-          P[k] = P[p];
-          P[p] = tmp;
-        }
+      int i = threadIdx.x, j = threadIdx.y;
       // put matrix F in shared memory
       if (i < n && j < n)
-        A[j+i*NT] = F[i+j*n];
+        A[i+j*NT] = F[i+j*n];
       __syncthreads();
 
       // loop over blocks of NT columns of X
@@ -409,36 +371,30 @@ namespace strumpack {
 
         // put X in shared memory, while applying the permutation
         if (i < n && c < m)
-          B[j+i*NT] = X[P[i]+c*n];
+          B[i+j*NT] = X[c+i*m];
         __syncthreads();
 
         // solve with L (unit diagonal)
         for (int k=0; k<n; k++) {
+            if (i == k) {
+                B[k + j * NT] /= A[k + k * NT];
+            }
+            __syncthreads();
           if (i > k && i < n && c < m)
-            B[j+i*NT] -= A[k+i*NT] * B[j+k*NT];
-          __syncthreads();
-        }
-
-        // solve with U
-        for (int k=n-1; k>=0; k--) {
-          if (i == k && c < m)
-            B[j+i*NT] /= A[i+i*NT];
-          __syncthreads();
-          if (i < k && c < m)
-            B[j+i*NT] -= A[k+i*NT] * B[j+k*NT];
+            B[i + j * NT] -= A[i + k * NT] * B[k + j * NT];
           __syncthreads();
         }
 
         // write from shared back to global device memory
         if (i < n && c < m)
-          X[i+c*n] = B[j+i*NT];
+          X[c+i*m] = B[i+j*NT];
       }
     }
 
     template<typename T, int NT> __global__ void
-    solve_block_kernel_batched(FrontData<T>* dat) {
+    solve_symmetric_block_kernel_batched(FrontData<T>* dat) {
       FrontData<T>& A = dat[blockIdx.x];
-      solve_block_kernel<T,NT>(A.n1, A.n2, A.F11, A.F12, A.piv);
+      solve_symmetric_block_kernel<T,NT>(A.n1, A.n2, A.F11, A.F21);
     }
 
 
@@ -448,7 +404,7 @@ namespace strumpack {
      * block.
      */
     template<typename T, int NT> __device__ void
-    Schur_block_kernel(int d1, int d2, T* F12, T* F21, T* F22) {
+    Schur_symmetric_block_kernel(int d1, int d2, T* F21, T* F22) {
       using cuda_primitive_t = typename primitive_type<T>::value_type;
       __shared__ cuda_primitive_t B_[NT*NT], A_[NT*NT];
       T *B = reinterpret_cast<T*>(B_), *A = reinterpret_cast<T*>(A_);
@@ -458,7 +414,7 @@ namespace strumpack {
         int c = cb + j;
         // put NT columns of F12 in shared memory B
         if (i < d1 && c < d2)
-          B[j+i*NT] = F12[i+c*d1];
+          B[j+i*NT] = F21[c+i*d2];
         __syncthreads();
         for (int rb=0; rb<d2; rb+=NT) {
           int r = rb + i;
@@ -479,25 +435,25 @@ namespace strumpack {
     }
 
     template<typename T, int NT> __global__ void
-    Schur_block_kernel_batched(FrontData<T>* dat) {
+    Schur_symmetric_block_kernel_batched(FrontData<T>* dat) {
       FrontData<T>& A = dat[blockIdx.x];
-      Schur_block_kernel<T,NT>(A.n1, A.n2, A.F12, A.F21, A.F22);
+      Schur_symmetric_block_kernel<T,NT>(A.n1, A.n2, A.F21, A.F22);
     }
 
 
     template<typename T, int NT, typename real_t>
-    void factor_block_batch(unsigned int count, FrontData<T>* dat,
+    void factor_symmetric_block_batch(unsigned int count, FrontData<T>* dat,
                             bool replace, real_t thresh, int* dinfo) {
       if (!count) return;
       using T_ = typename cuda_type<T>::value_type;
       auto dat_ = reinterpret_cast<FrontData<T_>*>(dat);
       dim3 block(NT, NT); //, grid(count, 1, 1);
-      LU_block_kernel_batched<T_,NT,real_t><<<count, block>>>
+      LLT_block_kernel_batched<T_,NT,real_t><<<count, block>>>
         (dat_, replace, thresh, dinfo);
       gpu_check(cudaPeekAtLastError());
-      solve_block_kernel_batched<T_,NT><<<count, block>>>(dat_);
+      solve_symmetric_block_kernel_batched<T_,NT><<<count, block>>>(dat_);
       gpu_check(cudaPeekAtLastError());
-      Schur_block_kernel_batched<T_,NT><<<count, block>>>(dat_);
+      Schur_symmetric_block_kernel_batched<T_,NT><<<count, block>>>(dat_);
       gpu_check(cudaPeekAtLastError());
     }
 
@@ -505,7 +461,7 @@ namespace strumpack {
     template<typename T, int NT> __global__ void
     solve_block_kernel_batched(int nrhs, FrontData<T>* dat) {
       FrontData<T>& A = dat[blockIdx.x];
-      solve_block_kernel<T,NT>(A.n1, nrhs, A.F11, A.F12, A.piv);
+      solve_symmetric_block_kernel<T,NT>(A.n1, nrhs, A.F11, A.F12, A.piv);
     }
 
     /**
@@ -646,25 +602,25 @@ namespace strumpack {
     template void extract_rhs(int, int, unsigned int, AssembleData<std::complex<double>>*, AssembleData<std::complex<double>>*);
 
 
-    template void factor_block_batch<float,8,float>(unsigned int, FrontData<float>*, bool, float, int*);
-    template void factor_block_batch<double,8,double>(unsigned int, FrontData<double>*, bool, double, int*);
-    template void factor_block_batch<std::complex<float>,8,float>(unsigned int, FrontData<std::complex<float>>*, bool, float, int*);
-    template void factor_block_batch<std::complex<double>,8,double>(unsigned int, FrontData<std::complex<double>>*, bool, double, int*);
+    template void factor_symmetric_block_batch<float,8,float>(unsigned int, FrontData<float>*, bool, float, int*);
+    template void factor_symmetric_block_batch<double,8,double>(unsigned int, FrontData<double>*, bool, double, int*);
+    template void factor_symmetric_block_batch<std::complex<float>,8,float>(unsigned int, FrontData<std::complex<float>>*, bool, float, int*);
+    template void factor_symmetric_block_batch<std::complex<double>,8,double>(unsigned int, FrontData<std::complex<double>>*, bool, double, int*);
 
-    template void factor_block_batch<float,16,float>(unsigned int, FrontData<float>*, bool, float, int*);
-    template void factor_block_batch<double,16,double>(unsigned int, FrontData<double>*, bool, double, int*);
-    template void factor_block_batch<std::complex<float>,16,float>(unsigned int, FrontData<std::complex<float>>*, bool, float, int*);
-    template void factor_block_batch<std::complex<double>,16,double>(unsigned int, FrontData<std::complex<double>>*, bool, double, int*);
+    template void factor_symmetric_block_batch<float,16,float>(unsigned int, FrontData<float>*, bool, float, int*);
+    template void factor_symmetric_block_batch<double,16,double>(unsigned int, FrontData<double>*, bool, double, int*);
+    template void factor_symmetric_block_batch<std::complex<float>,16,float>(unsigned int, FrontData<std::complex<float>>*, bool, float, int*);
+    template void factor_symmetric_block_batch<std::complex<double>,16,double>(unsigned int, FrontData<std::complex<double>>*, bool, double, int*);
 
-    template void factor_block_batch<float,24,float>(unsigned int, FrontData<float>*, bool, float, int*);
-    template void factor_block_batch<double,24,double>(unsigned int, FrontData<double>*, bool, double, int*);
-    template void factor_block_batch<std::complex<float>,24,float>(unsigned int, FrontData<std::complex<float>>*, bool, float, int*);
-    template void factor_block_batch<std::complex<double>,24,double>(unsigned int, FrontData<std::complex<double>>*, bool, double, int*);
+    template void factor_symmetric_block_batch<float,24,float>(unsigned int, FrontData<float>*, bool, float, int*);
+    template void factor_symmetric_block_batch<double,24,double>(unsigned int, FrontData<double>*, bool, double, int*);
+    template void factor_symmetric_block_batch<std::complex<float>,24,float>(unsigned int, FrontData<std::complex<float>>*, bool, float, int*);
+    template void factor_symmetric_block_batch<std::complex<double>,24,double>(unsigned int, FrontData<std::complex<double>>*, bool, double, int*);
 
-    template void factor_block_batch<float,32,float>(unsigned int, FrontData<float>*, bool, float, int*);
-    template void factor_block_batch<double,32,double>(unsigned int, FrontData<double>*, bool, double, int*);
-    template void factor_block_batch<std::complex<float>,32,float>(unsigned int, FrontData<std::complex<float>>*, bool, float, int*);
-    template void factor_block_batch<std::complex<double>,32,double>(unsigned int, FrontData<std::complex<double>>*, bool, double, int*);
+    template void factor_symmetric_block_batch<float,32,float>(unsigned int, FrontData<float>*, bool, float, int*);
+    template void factor_symmetric_block_batch<double,32,double>(unsigned int, FrontData<double>*, bool, double, int*);
+    template void factor_symmetric_block_batch<std::complex<float>,32,float>(unsigned int, FrontData<std::complex<float>>*, bool, float, int*);
+    template void factor_symmetric_block_batch<std::complex<double>,32,double>(unsigned int, FrontData<std::complex<double>>*, bool, double, int*);
 
     template void replace_pivots(int, float*, float, gpu::Stream*);
     template void replace_pivots(int, double*, double, gpu::Stream*);

@@ -52,6 +52,11 @@ namespace strumpack {
                                               int etree_level=0,
                                               int task_depth=0) override;
 
+        ReturnCode multifrontal_factorization_symmetric(const SpMat_t& A,
+                                              const SPOptions<scalar_t>& opts,
+                                              int etree_level=0,
+                                              int task_depth=0);
+
         void extract_CB_sub_matrix(const std::vector<std::size_t>& I,
                                    const std::vector<std::size_t>& J,
                                    DenseM_t& B, int task_depth) const override {}
@@ -81,6 +86,9 @@ namespace strumpack {
                             char* hea_mem, char* dea_mem);
         void factor_small_fronts(LInfo_t& L, gpu::FrontData<scalar_t>* fdata,
                                  int* dinfo, const SPOptions<scalar_t>& opts);
+
+        void factor_small_fronts_symmetric(LInfo_t& L, gpu::FrontData<scalar_t>* fdata,
+                                           int* dinfo, const SPOptions<scalar_t>& opts);
 
         ReturnCode split_smaller(const SpMat_t& A, const SPOptions<scalar_t>& opts,
                                  int etree_level=0, int task_depth=0);

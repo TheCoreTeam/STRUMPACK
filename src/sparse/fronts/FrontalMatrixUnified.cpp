@@ -110,7 +110,8 @@ namespace strumpack {
                 }
             }
             factor_size = L_size + U_size;
-            getrf_work_size = gpu::getrf_buffersize<scalar_t>(handle, max_dsep);
+//            getrf_work_size = gpu::getrf_buffersize<scalar_t>(handle, max_dsep);
+            getrf_work_size = gpu::potrf_buffersize<scalar_t>(handle, UpLo::L, max_dsep);
 
             factor_bytes = sizeof(scalar_t) * factor_size;
             factor_bytes = gpu::round_up(factor_bytes);
@@ -384,6 +385,32 @@ namespace strumpack {
         gpu::factor_block_batch<scalar_t,32>(L.N32, L.f32, replace, thresh, dinfo+L.N8+L.N16+L.N24);
     }
 
+    template<typename scalar_t, typename integer_t> void
+    FrontalMatrixUnified<scalar_t,integer_t>::factor_small_fronts_symmetric
+            (LInfo_t& L, gpu::FrontData<scalar_t>* fdata, int* dinfo,
+             const SPOptions<scalar_t>& opts) {
+        if (!L.small_fronts) return;
+        for (std::size_t n=0, n8=0, n16=L.N8, n24=n16+L.N16, n32=n24+L.N24;
+             n<L.small_fronts; n++) {
+            auto& f = *(L.f[n]);
+            const auto dsep = f.dim_sep();
+            gpu::FrontData<scalar_t>
+                    t(dsep, f.dim_upd(), f.F11_.data(), f.F12_.data(),
+                      f.F21_.data(), f.F22_.data(), f.piv_);
+            if (dsep <= 8)       fdata[n8++] = t;
+            else if (dsep <= 16) fdata[n16++] = t;
+            else if (dsep <= 24) fdata[n24++] = t;
+            else                 fdata[n32++] = t;
+        }
+        gpu_check(gpu::copy_host_to_device(L.f8, fdata, L.small_fronts));
+        auto replace = opts.replace_tiny_pivots();
+        auto thresh = opts.pivot_threshold();
+        gpu::factor_symmetric_block_batch<scalar_t,8>(L.N8, L.f8, replace, thresh, dinfo);
+        gpu::factor_symmetric_block_batch<scalar_t,16>(L.N16, L.f16, replace, thresh, dinfo+L.N8);
+        gpu::factor_symmetric_block_batch<scalar_t,24>(L.N24, L.f24, replace, thresh, dinfo+L.N8+L.N16);
+        gpu::factor_symmetric_block_batch<scalar_t,32>(L.N32, L.f32, replace, thresh, dinfo+L.N8+L.N16+L.N24);
+    }
+
     template<typename scalar_t,typename integer_t> ReturnCode
     FrontalMatrixUnified<scalar_t,integer_t>::split_smaller
             (const SpMat_t& A, const SPOptions<scalar_t>& opts,
@@ -486,10 +513,299 @@ namespace strumpack {
         return err_code;
     }
 
+    template<typename scalar_t,typename integer_t>
+    ReturnCode FrontalMatrixUnified<scalar_t, integer_t>::multifrontal_factorization_symmetric(
+            const SpMat_t& A,
+            const SPOptions<scalar_t>& opts,
+            int etree_level, int task_depth) {
+        ReturnCode err_code = ReturnCode::SUCCESS;
+        const int max_streams = opts.gpu_streams();
+        std::vector<gpu::SOLVERHandle> solver_handles(max_streams);
+        const int lvls = this->levels();
+        std::vector<LInfo_t> ldata(lvls);
+        for (int l=lvls-1; l>=0; l--) {
+            std::vector<F_t*> fp;
+            this->get_level_fronts(fp, l);
+            auto& L = ldata[l];
+            L = LInfo_t(fp, solver_handles[0], max_streams, &A);
+        }
+        auto peak_dmem = peak_device_memory(ldata);
+        if (peak_dmem >= 0.9 * gpu::available_memory())
+            return split_smaller(A, opts, etree_level, task_depth);
+
+        std::vector<gpu::Stream> streams(max_streams);
+        gpu::Stream copy_stream;
+        std::vector<gpu::BLASHandle> blas_handles(max_streams);
+        for (int i=0; i<max_streams; i++) {
+            blas_handles[i].set_stream(streams[i]);
+            solver_handles[i].set_stream(streams[i]);
+        }
+        std::size_t max_small_fronts = 0, max_pinned = 0;
+        for (int l=lvls-1; l>=0; l--) {
+            auto& L = ldata[l];
+            max_small_fronts = std::max(max_small_fronts, L.N8+L.N16+L.N24+L.N32);
+            for (auto& f : L.f) {
+                const std::size_t dsep = f->dim_sep();
+                const std::size_t dupd = f->dim_upd();
+                std::size_t fs = dsep*(dsep + 2*dupd);
+                max_pinned = std::max(max_pinned, fs);
+            }
+            max_pinned = std::max(max_pinned, L.factors_small);
+        }
+        gpu::HostMemory<scalar_t> pinned(2*max_pinned);
+        gpu::HostMemory<gpu::FrontData<scalar_t>> fdata(max_small_fronts);
+        std::size_t peak_hea_mem = 0;
+        for (int l=lvls-1; l>=0; l--)
+            peak_hea_mem = std::max(peak_hea_mem, ldata[l].ea_bytes);
+        gpu::HostMemory<char> hea_mem(peak_hea_mem);
+        gpu::DeviceMemory<char> all_dmem(peak_dmem);
+        char* old_work = nullptr;
+        for (int l=lvls-1; l>=0; l--) {
+            // TaskTimer tl("");
+            // tl.start();
+            LInfo_t& L = ldata[l];
+            // if (opts.verbose()) L.print_info(l, lvls);
+            try {
+                char *work_mem = nullptr, *dea_mem = nullptr;
+                scalar_t* dev_factors = nullptr;
+                if (l % 2) {
+                    work_mem = all_dmem;
+                    dea_mem = work_mem + L.work_bytes;
+                    dev_factors = gpu::aligned_ptr<scalar_t>(dea_mem + L.ea_bytes);
+                } else {
+                    work_mem = all_dmem + peak_dmem - L.work_bytes;
+                    dea_mem = work_mem - L.ea_bytes;
+                    dev_factors = gpu::aligned_ptr<scalar_t>(dea_mem - L.factor_bytes);
+                }
+                gpu_check(gpu::memset<scalar_t>(work_mem, 0, L.Schur_size));
+                gpu_check(gpu::memset<scalar_t>(dev_factors, 0, L.factor_size));
+//                L.set_factor_pointers(dev_factors);
+                L.set_factor_pointers(dev_factors, dev_factors + L.diagonal_size);
+                L.set_work_pointers(work_mem, max_streams);
+                old_work = work_mem;
+
+                // default stream
+                front_assembly(A, L, hea_mem, dea_mem);
+                gpu::Event e_assemble;
+                e_assemble.record();
+
+                // default stream
+                factor_small_fronts_symmetric(L, fdata, L.dev_getrf_err, opts);
+                gpu::Event e_small;
+                e_small.record();
+
+                for (auto& s : streams)
+                    e_assemble.wait(s);
+
+                // larger fronts in multiple streams.  Copy back in nchunks
+                // chunks, but a single chunk cannot be larger than the pinned
+                // buffer
+                const int nchunks = 16;
+                std::size_t Bf = (L.f.size()-L.small_fronts + nchunks - 1) / nchunks;
+                std::vector<std::size_t> chunks;
+//                std::vector<std::size_t> factors_chunk;
+                std::vector<std::size_t> factors_diagonal_chunk, factors_off_diagonal_chunk;
+                for (std::size_t n=L.small_fronts, fc=0, c=0, fdc = 0, fodc = 0; n<L.f.size(); n++) {
+                    auto& f = *(L.f[n]);
+                    const std::size_t dsep = f.dim_sep();
+                    const std::size_t dupd = f.dim_upd();
+                    std::size_t size_front = dsep * (dsep + 2*dupd);
+                    std::size_t size_factors_diagonal = dsep * dsep;
+                    std::size_t size_factors_off_diagonal = 2 * dsep * dupd;
+                    if (c == Bf || fc + size_front > max_pinned) {
+                        chunks.push_back(c);
+//                        factors_chunk.push_back(fc);
+                        factors_diagonal_chunk.push_back(fdc);
+                        factors_off_diagonal_chunk.push_back(fodc);
+                        c = fc = 0;
+                        fdc = fodc = 0;
+                    }
+                    c++;
+                    fc += size_front;
+                    fdc += size_factors_diagonal;
+                    fodc += size_factors_off_diagonal;
+                    if (n == L.f.size()-1) { // final chunk
+                        chunks.push_back(c);
+//                        factors_chunk.push_back(fc);
+                        factors_diagonal_chunk.push_back(fdc);
+                        factors_off_diagonal_chunk.push_back(fodc);
+                    }
+                }
+
+                e_small.wait(copy_stream);
+//                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+//                                  (pinned, dev_factors, L.factors_small, copy_stream));
+                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+                                  (pinned, dev_factors, L.factors_diagonal_small, copy_stream));
+                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+                                  (pinned + L.factors_diagonal_small,
+                                   dev_factors + L.diagonal_size,
+                                   L.factors_off_diagonal_small, copy_stream));
+
+                STRUMPACK_ADD_MEMORY(L.factor_bytes);
+//                L.f[0]->host_factors_.reset(new scalar_t[L.factor_size]);
+//                scalar_t* host_factors = L.f[0]->host_factors_.get();
+                L.f[0]->host_factors_diagonal_.reset(new scalar_t[L.diagonal_size]);
+                L.f[0]->host_factors_off_diagonal_.reset(new scalar_t[L.off_diagonal_size]);
+                scalar_t* host_factors_diagonal = L.f[0]->host_factors_diagonal_.get();
+                scalar_t* host_factors_off_diagonal = L.f[0]->host_factors_off_diagonal_.get();
+                copy_stream.synchronize();
+//#pragma omp parallel for
+//                for (std::size_t i=0; i<L.factors_small; i++)
+//                    host_factors[i] = pinned[i];
+//                host_factors += L.factors_small;
+                memcpy(host_factors_diagonal, pinned, L.factors_diagonal_small * sizeof(scalar_t));
+                memcpy(host_factors_off_diagonal, pinned + L.factors_diagonal_small, L.factors_off_diagonal_small * sizeof(scalar_t));
+                host_factors_diagonal += L.factors_diagonal_small;
+                host_factors_off_diagonal += L.factors_off_diagonal_small;
+
+                if (!chunks.empty()) {
+                    scalar_t* pin[2] = {pinned.template as<scalar_t>(),
+                                        pinned.template as<scalar_t>() + max_pinned};
+                    std::vector<gpu::Event> events(chunks.size());
+
+                    for (std::size_t c=0, n=L.small_fronts; c<chunks.size(); c++) {
+                        int s = c % streams.size(), n0 = n;
+#pragma omp parallel
+#pragma omp single
+                        {
+                            if (c) {
+#pragma omp task
+                                {
+                                    copy_stream.synchronize();
+//                                    auto fc = factors_chunk[c-1];
+//#if defined(STRUMPACK_USE_OPENMP_TASKLOOP)
+//#pragma omp taskloop //num_tasks(omp_get_num_threads()-1)
+//#endif
+//                                    for (std::size_t i=0; i<fc; i++)
+//                                        host_factors[i] = pin[(c-1) % 2][i];
+//                                    host_factors += fc;
+                                    auto fdc = factors_diagonal_chunk[c-1];
+                                    auto fodc = factors_off_diagonal_chunk[c-1];
+                                    memcpy(host_factors_diagonal,
+                                           pin[(c-1) % 2], fdc * sizeof(scalar_t));
+                                    memcpy(host_factors_off_diagonal,
+                                           pin[(c-1) % 2] + fdc, fodc * sizeof(scalar_t));
+                                    host_factors_diagonal += fdc;
+                                    host_factors_off_diagonal += fodc;
+                                }
+                            }
+#pragma omp task
+                            {
+                                for (std::size_t ci=0; ci<chunks[c]; ci++, n++) {
+                                    auto& f = *(L.f[n]);
+                                    gpu::potrf(solver_handles[s],
+                                               UpLo::L,
+                                               f.F11_,
+                                               L.dev_getrf_work + s * L.getrf_work_size,
+                                               L.getrf_work_size,
+                                               L.dev_getrf_err + n);
+                                    if (opts.replace_tiny_pivots())
+                                        gpu::replace_pivots
+                                                (f.dim_sep(), f.F11_.data(),
+                                                 opts.pivot_threshold(), &streams[s]);
+                                    if (f.dim_upd()) {
+                                        gpu::trsm(blas_handles[s],
+                                                  Side::R, UpLo::L, Trans::T, Diag::N,
+                                                  scalar_t(1.), f.F11_, f.F21_);
+                                        gpu::gemm(blas_handles[s],
+                                                  Trans::N, Trans::T,
+                                                  scalar_t(-1.), f.F21_, f.F21_, scalar_t(1.), f.F22_);
+                                    }
+                                }
+                                events[c].record(streams[s]);
+                                events[c].wait(copy_stream);
+                                auto& f = *(L.f[n0]);
+//                                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+//                                                  (pin[c % 2], f.F11_.data(),
+//                                                   factors_chunk[c], copy_stream));
+                                auto fdc = factors_diagonal_chunk[c];
+                                auto fodc = factors_off_diagonal_chunk[c];
+                                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+                                                  (pin[c % 2], f.F11_.data(),
+                                                   fdc, copy_stream));
+                                gpu_check(gpu::copy_device_to_host_async<scalar_t>
+                                                  (pin[c % 2] + fdc, f.F12_.data(),
+                                                   fodc, copy_stream));
+                            }
+                        }
+                    }
+                    copy_stream.synchronize();
+//                    auto fc = factors_chunk.back();
+//#pragma omp parallel for
+//                    for (std::size_t i=0; i<fc; i++)
+//                        host_factors[i] = pin[(chunks.size()-1) % 2][i];
+                    auto fdc = factors_diagonal_chunk.back();
+                    auto fodc = factors_off_diagonal_chunk.back();
+                    memcpy(host_factors_diagonal, pin[(chunks.size()-1) % 2], fdc * sizeof(scalar_t));
+                    memcpy(host_factors_off_diagonal, pin[(chunks.size()-1) % 2] + fdc, fodc * sizeof(scalar_t));
+                }
+
+                L.f[0]->pivot_mem_.resize(L.piv_size);
+                copy_stream.synchronize();
+                gpu_check(gpu::copy_device_to_host
+                                  (L.f[0]->pivot_mem_.data(), L.f[0]->piv_, L.piv_size));
+//                L.set_factor_pointers(L.f[0]->host_factors_.get());
+                L.set_factor_pointers(L.f[0]->host_factors_diagonal_.get(), L.f[0]->host_factors_off_diagonal_.get());
+                L.set_pivot_pointers(L.f[0]->pivot_mem_.data());
+
+                std::vector<int> getrf_infos(L.f.size());
+                gpu_check(gpu::copy_device_to_host
+                                  (getrf_infos.data(), L.dev_getrf_err, L.f.size()));
+//                Eigen::Map<Eigen::Matrix<scalar_t, Eigen::Dynamic, Eigen::Dynamic>> F12{L.f[1]->F12_.data(), L.f[1]->F12_.rows(), L.f[1]->F12_.cols()};
+//                Eigen::Map<Eigen::Matrix<scalar_t, Eigen::Dynamic, Eigen::Dynamic>> F21{L.f[1]->F21_.data(), L.f[1]->F21_.rows(), L.f[1]->F21_.cols()};
+//                std::cout << F12.row(0) - F21.transpose().row(0) << std::endl;
+//                if (l == lvls - 1) {
+//                Eigen::Map<Eigen::Matrix<scalar_t, Eigen::Dynamic, Eigen::Dynamic>> F12{L.f[1]->F12_.data(), L.f[1]->F12_.rows(), L.f[1]->F12_.cols()};
+//                    Eigen::Map<Eigen::Matrix<scalar_t, Eigen::Dynamic, Eigen::Dynamic>> F11{L.f[1]->F11_.data(), L.f[1]->F11_.rows(), L.f[1]->F11_.cols()};
+//                    std::cout << F11 << std::endl;
+//                    std::cout << F12 << std::endl;
+//                auto F22Ptr = new scalar_t[L.f[0]->F22_.rows() * L.f[0]->F22_.cols()];
+//                cudaMemcpy(F22Ptr, L.f[0]->F22_.data(), L.f[0]->F22_.rows() * L.f[0]->F22_.cols() * sizeof(scalar_t), cudaMemcpyDeviceToHost);
+//                Eigen::Map<Eigen::Matrix<scalar_t, Eigen::Dynamic, Eigen::Dynamic>> F22{F22Ptr, L.f[0]->F22_.rows(), L.f[0]->F22_.cols()};
+//                    std::cout << F22 << std::endl;
+//                delete[] F22Ptr;
+//                }
+                for (auto ierr : getrf_infos)
+                    if (ierr) {
+                        err_code = ReturnCode::ZERO_PIVOT;
+                        break;
+                    }
+            } catch (const std::bad_alloc& e) {
+                std::cerr << "Out of memory" << std::endl;
+                abort();
+            }
+            long long level_flops, small_flops;
+            L.flops(level_flops, small_flops);
+            STRUMPACK_FULL_RANK_FLOPS(level_flops);
+            STRUMPACK_FLOPS(small_flops);
+            // if (opts.verbose()) {
+            //   auto level_time = tl.elapsed();
+            //   std::cout << "#   GPU Factorization complete, took: "
+            //             << level_time << " seconds, "
+            //             << level_flops / 1.e9 << " GFLOPS, "
+            //             << (float(level_flops) / level_time) / 1.e9
+            //             << " GFLOP/s" << std::endl;
+            // }
+        }
+        const std::size_t dupd = dim_upd();
+        if (dupd) { // get the contribution block from the device
+            host_Schur_.reset(new scalar_t[dupd*dupd]);
+            gpu_check(gpu::copy_device_to_host
+                              (host_Schur_.get(),
+                               reinterpret_cast<scalar_t*>(old_work), dupd*dupd));
+            F22_ = DenseMW_t(dupd, dupd, host_Schur_.get(), dupd);
+        }
+        return err_code;
+    }
+
     template<typename scalar_t,typename integer_t> ReturnCode
     FrontalMatrixUnified<scalar_t,integer_t>::multifrontal_factorization
             (const SpMat_t& A, const SPOptions<scalar_t>& opts,
              int etree_level, int task_depth) {
+        if (A.symm_sparse()) {
+            return multifrontal_factorization_symmetric(A, opts, etree_level, task_depth + 1);
+        }
         ReturnCode err_code = ReturnCode::SUCCESS;
         const int max_streams = opts.gpu_streams();
         std::vector<gpu::SOLVERHandle> solver_handles(max_streams);
@@ -760,7 +1076,8 @@ namespace strumpack {
             (DenseM_t& b, DenseM_t& bupd, int etree_level, int task_depth) const {
         if (dim_sep()) {
             DenseMW_t bloc(dim_sep(), b.cols(), b, this->sep_begin_, 0);
-            F11_.solve_LU_in_place(bloc, piv_, task_depth);
+            trsv(UpLo::L, Trans::N, Diag::N, F11_, bloc, task_depth);
+//            F11_.solve_LU_in_place(bloc, piv_, task_depth);
             if (dim_upd()) {
                 if (b.cols() == 1)
                     gemv(Trans::N, scalar_t(-1.), F21_, bloc,
@@ -779,13 +1096,14 @@ namespace strumpack {
             DenseMW_t yloc(dim_sep(), y.cols(), y, this->sep_begin_, 0);
             if (y.cols() == 1) {
                 if (dim_upd())
-                    gemv(Trans::N, scalar_t(-1.), F12_, yupd,
+                    gemv(Trans::T, scalar_t(-1.), F21_, yupd,
                          scalar_t(1.), yloc, task_depth);
             } else {
                 if (dim_upd())
-                    gemm(Trans::N, Trans::N, scalar_t(-1.), F12_, yupd,
+                    gemm(Trans::T, Trans::N, scalar_t(-1.), F21_, yupd,
                          scalar_t(1.), yloc, task_depth);
             }
+            trsv(UpLo::L, Trans::T, Diag::N, F11_, yloc, params::task_recursion_cutoff_level);
         }
     }
 

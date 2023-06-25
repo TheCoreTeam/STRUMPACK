@@ -421,6 +421,19 @@ namespace strumpack {
         (char* ul, strumpack_blas_int* n, std::complex<double>* a,
          strumpack_blas_int* lda, strumpack_blas_int* info);
 
+    void STRUMPACK_FC_GLOBAL(spotrs,SPOTRS)
+            (char* t, strumpack_blas_int* n, strumpack_blas_int* nrhs, const float* a, strumpack_blas_int* lda,
+             float* b, strumpack_blas_int* ldb, strumpack_blas_int* info);
+    void STRUMPACK_FC_GLOBAL(dpotrs,DPOTRS)
+            (char* t, strumpack_blas_int* n, strumpack_blas_int* nrhs, const double* a, strumpack_blas_int* lda,
+             double* b, strumpack_blas_int* ldb, strumpack_blas_int* info);
+    void STRUMPACK_FC_GLOBAL(cpotrs,CPOTRS)
+            (char* t, strumpack_blas_int* n, strumpack_blas_int* nrhs, const std::complex<float>* a, strumpack_blas_int* lda,
+             std::complex<float>* b, strumpack_blas_int* ldb, strumpack_blas_int* info);
+    void STRUMPACK_FC_GLOBAL(zpotrs,ZPOTRS)
+            (char* t, strumpack_blas_int* n, strumpack_blas_int* nrhs, const std::complex<double>* a, strumpack_blas_int* lda,
+             std::complex<double>* b, strumpack_blas_int* ldb, strumpack_blas_int* info);
+
       void STRUMPACK_FC_GLOBAL(sgetri,SGETRI)
         (strumpack_blas_int* n, float* a, strumpack_blas_int* lda, strumpack_blas_int* ipiv,
          float* work, strumpack_blas_int* lwork, strumpack_blas_int* info);
@@ -1604,6 +1617,58 @@ namespace strumpack {
       STRUMPACK_FLOPS(4*potrf_flops(n));
       return info;
     }
+
+#if defined(STRUMPACK_USE_BLAS64)
+    int potrs(char t, int n, int nrhs, const float* a, int lda, float* b, int ldb) {
+      strumpack_blas_int info, n_ = n, nrhs_ = nrhs, lda_ = lda, ldb_ = ldb;
+      STRUMPACK_FC_GLOBAL(spotrs,SPOTRS)(&t, &n_, &nrhs_, a, &lda_, b, &ldb_, &info);
+      STRUMPACK_FLOPS(potrs_flops(n, nrhs));
+      return info;
+    }
+    int potrs(char t, int n, int nrhs, const double* a, int lda, double* b, int ldb) {
+      strumpack_blas_int info, n_ = n, nrhs_ = nrhs, lda_ = lda, ldb_ = ldb;
+      STRUMPACK_FC_GLOBAL(dpotrs,DPOTRS)(&t, &n_, &nrhs_, a, &lda_, b, &ldb_, &info);
+      STRUMPACK_FLOPS(potrs_flops(n, nrhs));
+      return info;
+    }
+    int potrs(char t, int n, int nrhs, const std::complex<float>* a, int lda, std::complex<float>* b, int ldb) {
+      strumpack_blas_int info, n_ = n, nrhs_ = nrhs, lda_ = lda, ldb_ = ldb;
+      STRUMPACK_FC_GLOBAL(cpotrs,CPOTRS)(&t, &n_, &nrhs_, a, &lda_, b, &ldb_, &info);
+      STRUMPACK_FLOPS(4*potrs_flops(n, nrhs));
+      return info;
+    }
+    int potrs(char t, int n, int nrhs, const std::complex<double>* a, int lda, std::complex<double>* b, int ldb) {
+      strumpack_blas_int info, n_ = n, nrhs_ = nrhs, lda_ = lda, ldb_ = ldb;
+      STRUMPACK_FC_GLOBAL(zpotrs,ZPOTRS)(&t, &n_, &nrhs_, a, &lda_, b, &ldb_, &info);
+      STRUMPACK_FLOPS(4*potrs_flops(n, nrhs));
+      return info;
+    }
+#else
+        int potrs(char t, int n, int nrhs, const float* a, int lda, float* b, int ldb) {
+            int info;
+            STRUMPACK_FC_GLOBAL(spotrs,SPOTRS)(&t, &n, &nrhs, a, &lda, b, &ldb, &info);
+            STRUMPACK_FLOPS(potrs_flops(n, nrhs));
+            return info;
+        }
+        int potrs(char t, int n, int nrhs, const double* a, int lda, double* b, int ldb) {
+            int info;
+            STRUMPACK_FC_GLOBAL(dpotrs,DPOTRS)(&t, &n, &nrhs, a, &lda, b, &ldb, &info);
+            STRUMPACK_FLOPS(potrs_flops(n, nrhs));
+            return info;
+        }
+        int potrs(char t, int n, int nrhs, const std::complex<float>* a, int lda, std::complex<float>* b, int ldb) {
+            int info;
+            STRUMPACK_FC_GLOBAL(cpotrs,CPOTRS)(&t, &n, &nrhs, a, &lda, b, &ldb, &info);
+            STRUMPACK_FLOPS(4*potrs_flops(n, nrhs));
+            return info;
+        }
+        int potrs(char t, int n, int nrhs, const std::complex<double>* a, int lda, std::complex<double>* b, int ldb) {
+            int info;
+            STRUMPACK_FC_GLOBAL(zpotrs,ZPOTRS)(&t, &n, &nrhs, a, &lda, b, &ldb, &info);
+            STRUMPACK_FLOPS(4*potrs_flops(n, nrhs));
+            return info;
+        }
+#endif
 
 
     int xxglq(int m, int n, int k, float* a, int lda, const float* tau,

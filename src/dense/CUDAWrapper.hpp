@@ -330,6 +330,13 @@ namespace strumpack {
           const DenseMatrix<scalar_t>& A, const int* devIpiv,
           DenseMatrix<scalar_t>& B, int *devInfo);
 
+    template<typename scalar_t>
+    int potrf_buffersize(SOLVERHandle& handle, UpLo uplo, int n);
+
+        template<typename scalar_t> void
+    potrf(SOLVERHandle& handle, UpLo uplo, DenseMatrix<scalar_t>& A,
+          scalar_t* Workspace, int Lwork, int* devInfo);
+
     template<typename scalar_t> void
     gemm(BLASHandle& handle, Trans ta, Trans tb,
          scalar_t alpha, const DenseMatrix<scalar_t>& a,
@@ -341,6 +348,16 @@ namespace strumpack {
          scalar_t alpha, const DenseMatrix<scalar_t>& a,
          const DenseMatrix<scalar_t>& x, scalar_t beta,
          DenseMatrix<scalar_t>& y);
+
+    template<typename scalar_t> void
+    syrk(BLASHandle& handle, UpLo uplo, Trans ta,
+         scalar_t alpha, const DenseMatrix<scalar_t>& a,
+         scalar_t beta, DenseMatrix<scalar_t>& c);
+
+    template<typename scalar_t> void
+    trsm(BLASHandle& handle, Side side, UpLo uplo, Trans t,
+         Diag diag, scalar_t alpha, const DenseMatrix<scalar_t>& a,
+         DenseMatrix<scalar_t>& b);
 
     template<typename scalar_t> void
     laswp(BLASHandle& handle, DenseMatrix<scalar_t>& A,
