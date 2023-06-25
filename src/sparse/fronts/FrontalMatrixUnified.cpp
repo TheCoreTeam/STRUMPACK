@@ -405,13 +405,15 @@ namespace strumpack {
         }
         STRUMPACK_ADD_MEMORY(dsep*(dsep+2*dupd)*sizeof(scalar_t));
         STRUMPACK_ADD_MEMORY(dupd*dupd*sizeof(scalar_t));
-        host_factors_.reset(new scalar_t[dsep*(dsep+2*dupd)]);
+        host_factors_diagonal_.reset(new scalar_t[dsep*dsep]);
+        host_factors_off_diagonal_.reset(new scalar_t[2 * dsep * dupd]);
         host_Schur_.reset(new scalar_t[dupd*dupd]);
         {
-            auto fmem = host_factors_.get();
-            F11_ = DenseMW_t(dsep, dsep, fmem, dsep); fmem += dsep*dsep;
-            F12_ = DenseMW_t(dsep, dupd, fmem, dsep); fmem += dsep*dupd;
-            F21_ = DenseMW_t(dupd, dsep, fmem, dupd);
+            auto fmem_diagonal = host_factors_diagonal_.get();
+            auto fmem_off_diagonal = host_factors_off_diagonal_.get();
+            F11_ = DenseMW_t(dsep, dsep, fmem_diagonal, dsep);
+            F12_ = DenseMW_t(dsep, dupd, fmem_off_diagonal, dsep); fmem_off_diagonal += dsep*dupd;
+            F21_ = DenseMW_t(dupd, dsep, fmem_off_diagonal, dupd);
         }
         F22_ = DenseMW_t(dupd, dupd, host_Schur_.get(), dupd);
         F11_.zero(); F12_.zero();
