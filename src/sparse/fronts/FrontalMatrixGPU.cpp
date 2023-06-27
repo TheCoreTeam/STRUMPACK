@@ -484,16 +484,6 @@ namespace strumpack {
     auto peak_dmem = peak_device_memory(ldata);
     if (peak_dmem >= 0.9 * gpu::available_memory()) {
         return split_smaller(A, opts, etree_level, task_depth);
-    } else {
-        if (opts.verbose()) {
-            if (etree_level == 0) {
-                std::cout << "#   - GPU memory: "
-                << (double)peak_dmem * sizeof(char) / 1024 / 1024 << "MB" << std::endl;
-            } else {
-                std::cout << "#   - GPU memory for subtree: "
-                << (double)peak_dmem * sizeof(char) / 1024 / 1024 << "MB" << std::endl;
-            }
-        }
     }
     std::vector<gpu::Stream> streams(max_streams);
     gpu::Stream copy_stream;
@@ -521,6 +511,14 @@ namespace strumpack {
       peak_hea_mem = std::max(peak_hea_mem, ldata[l].ea_bytes);
     gpu::HostMemory<char> hea_mem(peak_hea_mem);
     gpu::DeviceMemory<char> all_dmem(peak_dmem);
+    if (opts.verbose()) {
+      std::cout << "#   - working space memory (host) = " << double(peak_hea_mem) / 1024 / 1024 << " MB"
+                << std::endl;
+      std::cout << "#   - working space memory (device) = " << double(peak_dmem) / 1024 / 1024 << " MB"
+                << std::endl;
+      std::cout << "#   - working space memory (pinned) = "
+                << double(2 * max_pinned) * sizeof(scalar_t) / 1024 / 1024 << " MB" << std::endl;
+    }
     char* old_work = nullptr;
     for (int l=lvls-1; l>=0; l--) {
       // TaskTimer tl("");
