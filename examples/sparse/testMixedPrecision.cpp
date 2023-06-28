@@ -88,6 +88,8 @@ void test(CSRMatrix<working_t,int>& A,
     spss.solver().options().set_Krylov_solver(KrylovSolver::DIRECT);
     // spss.solver().options().set_matching(MatchingJob::NONE);
     spss.solver().options().set_from_command_line(argc, argv);
+    spss.options().disable_unified();
+    spss.solver().options().disable_unified();
 
     spss.set_matrix(A);
     spss.reorder();
@@ -109,6 +111,7 @@ void test(CSRMatrix<working_t,int>& A,
     SparseSolver<working_t,int> spss;
     // spss.options().set_matching(MatchingJob::NONE);
     spss.options().set_from_command_line(argc, argv);
+    spss.options().disable_unified();
 
     spss.set_matrix(A);
     spss.reorder();
@@ -163,6 +166,7 @@ int main(int argc, char* argv[]) {
   {
     // step 7, but in double, not double-double
     SparseSolver<double,int> spss;
+    spss.options().disable_unified();
     // SparseSolverMixedPrecision<double,long double,int> spss;
     spss.set_matrix(A_d);
     spss.solve(b_d, x_true_d);
