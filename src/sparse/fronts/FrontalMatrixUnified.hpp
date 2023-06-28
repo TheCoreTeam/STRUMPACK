@@ -41,11 +41,17 @@ namespace strumpack {
                          std::vector<integer_t>& upd);
         ~FrontalMatrixUnified();
 
+        long long dense_node_factor_nonzeros() const override;
+
         void release_work_memory() override;
 
         void extend_add_to_dense(DenseM_t& paF11, DenseM_t& paF12,
                                  DenseM_t& paF21, DenseM_t& paF22,
                                  const F_t* p, int task_depth) override;
+
+        void extend_add_to_dense_symmetric(DenseM_t& paF11,
+                                           DenseM_t& paF21, DenseM_t& paF22,
+                                           const F_t* p, int task_depth) override;
 
         ReturnCode multifrontal_factorization(const SpMat_t& A,
                                               const SPOptions<scalar_t>& opts,
@@ -72,7 +78,7 @@ namespace strumpack {
 
     private:
         std::unique_ptr<scalar_t[]> host_factors_, host_Schur_;
-        std::unique_ptr<scalar_t[]> host_factors_diagonal_, host_factors_off_diagonal_;
+        std::unique_ptr<scalar_t[], std::function<void(scalar_t*)>> host_factors_diagonal_{nullptr, std::default_delete<scalar_t[]>{}}, host_factors_off_diagonal_{nullptr, std::default_delete<scalar_t[]>{}};
         DenseMW_t F11_, F12_, F21_, F22_;
         Eigen::SparseMatrix<scalar_t,Eigen::ColMajor,integer_t> F11L_sparse_{};
         Eigen::SparseMatrix<scalar_t,Eigen::ColMajor,integer_t> F11U_sparse_{};
@@ -84,6 +90,8 @@ namespace strumpack {
 
         void front_assembly(const SpMat_t& A, LInfo_t& L,
                             char* hea_mem, char* dea_mem);
+        void front_assembly_symmetric(const SpMat_t& A, LInfo_t& L,
+                                      char* hea_mem, char* dea_mem);
         void factor_small_fronts(LInfo_t& L, gpu::FrontData<scalar_t>* fdata,
                                  int* dinfo, const SPOptions<scalar_t>& opts);
 
@@ -92,6 +100,9 @@ namespace strumpack {
 
         ReturnCode split_smaller(const SpMat_t& A, const SPOptions<scalar_t>& opts,
                                  int etree_level=0, int task_depth=0);
+
+        ReturnCode split_smaller_symmetric(const SpMat_t& A, const SPOptions<scalar_t>& opts,
+                                           int etree_level=0, int task_depth=0);
 
         void fwd_solve_phase2(DenseM_t& b, DenseM_t& bupd,
                               int etree_level, int task_depth) const override;
