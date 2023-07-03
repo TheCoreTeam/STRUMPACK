@@ -151,8 +151,7 @@ namespace strumpack {
                     Schur_size += dupd*dupd;
                     piv_size += dsep;
                     total_upd_size += dupd;
-//                    if (dsep <= 32) {
-                    if (0) {
+                    if (dsep <= 32) {
                         factors_diagonal_small += dsep * dsep;
                         factors_off_diagonal_small += dsep * dupd;
                         factors_small += dsep*(dsep + dupd);
