@@ -62,6 +62,13 @@ namespace strumpack {
     return false;
 #endif
   }
+    template<typename scalar_t> bool is_unified
+            (const SPOptions<scalar_t>& opts) {
+#if defined(STRUMPACK_USE_CUDA) || defined(STRUMPACK_USE_HIP) || defined(STRUMPACK_USE_SYCL)
+        return opts.use_unified() && opts.compression() == CompressionType::NONE;
+#endif
+        return false;
+    }
   template<typename scalar_t> bool is_HSS
   (int dsep, int dupd, bool compressed_parent,
    const SPOptions<scalar_t>& opts) {

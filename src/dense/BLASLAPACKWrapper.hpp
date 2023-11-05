@@ -670,6 +670,18 @@ namespace strumpack {
     int potrf(char ul, int n, std::complex<float>* a, int lda);
     int potrf(char ul, int n, std::complex<double>* a, int lda);
 
+    inline long long potrs_flops(long long n, long long nrhs) {
+        return getrs_flops(n, nrhs);
+    }
+    int potrs(char t, int n, int nrhs, const float* a, int lda,
+              float* b, int ldb);
+    int potrs(char t, int n, int nrhs, const double* a, int lda,
+              double* b, int ldb);
+    int potrs(char t, int n, int nrhs, const std::complex<float>* a, int lda,
+              std::complex<float>* b, int ldb);
+    int potrs(char t, int n, int nrhs, const std::complex<double>* a, int lda,
+              std::complex<double>* b, int ldb);
+
     inline long long xxglq_flops(long long m, long long n, long long k) {
       if (m == k) return 2 * m * m *(3 * n - m) / 3;
       else return 4 * m * n * k - 2 * (m + n) * k * k + 4 * k * k * k / 3;

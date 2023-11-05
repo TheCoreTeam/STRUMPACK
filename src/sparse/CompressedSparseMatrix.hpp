@@ -385,6 +385,14 @@ namespace strumpack {
                   integer_t slo, integer_t shi,
                   const std::vector<integer_t>& upd,
                   int depth) const = 0;
+
+    // TODO(Jie): make it pure virtual
+    virtual void
+    extract_front_symmetric(DenseM_t& F11, DenseM_t& F21,
+                            integer_t slo, integer_t shi,
+                            const std::vector<integer_t>& upd,
+                            int depth) const { abort(); };
+
     virtual void
     push_front_elements(integer_t, integer_t, const std::vector<integer_t>&,
                         std::vector<Triplet<scalar_t>>&,
@@ -394,9 +402,20 @@ namespace strumpack {
     set_front_elements(integer_t, integer_t, const std::vector<integer_t>&,
                        Triplet<scalar_t>*, Triplet<scalar_t>*,
                        Triplet<scalar_t>*) const = 0;
+
+    // TODO(Jie): make it pure virtual
+    virtual void
+    set_front_elements_symmetric(integer_t, integer_t, const std::vector<integer_t>&,
+            Triplet<scalar_t>*, Triplet<scalar_t>*) const { abort(); };
+
     virtual void
     count_front_elements(integer_t, integer_t, const std::vector<integer_t>&,
                          std::size_t&, std::size_t&, std::size_t&) const = 0;
+
+    // TODO(Jie): make it pure virtual
+    virtual void
+    count_front_elements_symmetric(integer_t, integer_t, const std::vector<integer_t>&,
+            std::size_t&, std::size_t&) const { abort(); };
 
     virtual void
     front_multiply(integer_t slo, integer_t shi,

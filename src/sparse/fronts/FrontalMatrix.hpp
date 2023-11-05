@@ -99,6 +99,11 @@ namespace strumpack {
     multifrontal_factorization(const SpMat_t& A, const Opts_t& opts,
                                int etree_level=0, int task_depth=0) = 0;
 
+    // TODO(Jie): make it pure virtual
+    virtual ReturnCode
+    multifrontal_factorization_symmetric(const SpMat_t& A, const Opts_t& opts,
+                             int etree_level=0, int task_depth=0) { abort(); };
+
     virtual ReturnCode factor(const SpMat_t& A, const Opts_t& opts,
                               VectorPool<scalar_t>& workspace,
                               int etree_level=0, int task_depth=0) {
@@ -151,6 +156,13 @@ namespace strumpack {
                         int task_depth) {
       extend_add_to_dense(paF11, paF12, paF21, paF22, p, task_depth);
     }
+
+    // TODO(Jie): make it pure virtual
+    virtual void
+    extend_add_to_dense_symmetric(DenseM_t& paF11,
+                                  DenseM_t& paF21, DenseM_t& paF22,
+                                  const FrontalMatrix<scalar_t,integer_t>* p,
+                                  int task_depth) { abort(); }
 
     virtual void
     extend_add_to_blr(BLRM_t& paF11, BLRM_t& paF12,

@@ -126,6 +126,11 @@ namespace strumpack {
                        const std::vector<integer_t>& upd,
                        int depth) const override;
 
+    void extract_front_symmetric(DenseM_t& F11, DenseM_t& F21,
+                                 integer_t sep_begin, integer_t sep_end,
+                                 const std::vector<integer_t>& upd,
+                                 int depth) const override;
+
     void push_front_elements(integer_t, integer_t,
                              const std::vector<integer_t>&,
                              std::vector<Triplet<scalar_t>>&,
@@ -135,10 +140,17 @@ namespace strumpack {
                             const std::vector<integer_t>&,
                             Triplet<scalar_t>*, Triplet<scalar_t>*,
                             Triplet<scalar_t>*) const override;
+    void set_front_elements_symmetric(integer_t, integer_t,
+                                      const std::vector<integer_t>&,
+                                              Triplet<scalar_t>*, Triplet<scalar_t>*) const override;
     void count_front_elements(integer_t, integer_t,
                               const std::vector<integer_t>&,
                               std::size_t&, std::size_t&, std::size_t&)
       const override;
+
+      void count_front_elements_symmetric(integer_t, integer_t,
+                                const std::vector<integer_t>&,
+                                std::size_t&, std::size_t&) const override;
 
     void front_multiply_F11(Trans op, integer_t slo, integer_t shi,
                             const DenseM_t& R, DenseM_t& S,
